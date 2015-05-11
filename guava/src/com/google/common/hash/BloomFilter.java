@@ -245,6 +245,33 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
     this.bits.putAll(that.bits);
   }
 
+  /**
+   * Combines this bloom filter with another bloom filter by performing a bitwise AND of the
+   * underlying data. The mutations happen to <b>this</b> instance. Callers must ensure the
+   * bloom filters are appropriately sized to avoid saturating them.
+   *
+   * @param that The bloom filter to combine this bloom filter with. It is not mutated.
+   * @throws IllegalArgumentException if {@code isCompatible(that) == false}
+   *
+   */
+  public void intersect(BloomFilter<T> that) {
+    checkNotNull(that);
+    checkArgument(this != that, "Cannot combine a BloomFilter with itself.");
+    checkArgument(this.numHashFunctions == that.numHashFunctions,
+        "BloomFilters must have the same number of hash functions (%s != %s)",
+        this.numHashFunctions, that.numHashFunctions);
+    checkArgument(this.bitSize() == that.bitSize(),
+        "BloomFilters must have the same size underlying bit arrays (%s != %s)",
+        this.bitSize(), that.bitSize());
+    checkArgument(this.strategy.equals(that.strategy),
+        "BloomFilters must have equal strategies (%s != %s)",
+        this.strategy, that.strategy);
+    checkArgument(this.funnel.equals(that.funnel),
+        "BloomFilters must have equal funnels (%s != %s)",
+        this.funnel, that.funnel);
+    this.bits.intersect(that.bits);
+  }
+
   @Override
   public boolean equals(@Nullable Object object) {
     if (object == this) {
@@ -478,4 +505,9 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
       throw ioException;
     }
   }
+
+	@Override
+	public String toString() {
+		return String.format("BloomFilter[%d bits, %.2f%% filled]", this.bits.bitSize(), this.bits.bitCount * 100d / this.bitSize());
+	}
 }
