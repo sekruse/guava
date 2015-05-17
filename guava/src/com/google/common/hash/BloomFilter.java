@@ -188,8 +188,15 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
   /**
    * Returns the number of bits in the underlying bit array.
    */
-  @VisibleForTesting long bitSize() {
+  public long bitSize() {
     return bits.bitSize();
+  }
+
+  /**
+   * Returns the number of set bits in the underlying bit array.
+   */
+  public long bitCount() {
+    return bits.bitCount();
   }
 
   /**
