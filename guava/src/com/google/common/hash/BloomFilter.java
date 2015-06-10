@@ -93,7 +93,7 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
   }
 
   /** The bit set of the BloomFilter (not necessarily power of 2!)*/
-  private final BitArray bits;
+  private BitArray bits;
 
   /** Number of hashes per element */
   private final int numHashFunctions;
@@ -173,7 +173,7 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
    * {@code true} for an object that has not actually been put in the {@code BloomFilter}.
    *
    * <p>Ideally, this number should be close to the {@code fpp} parameter
-   * passed in {@linkplain #create(Funnel, int, double)}, or smaller. If it is
+   * passed in {@linkplain #create(Funnel, long, double, Strategy)}, or smaller. If it is
    * significantly higher, it is usually the case that too many elements (more than
    * expected) have been put in the {@code BloomFilter}, degenerating it.
    *
@@ -197,6 +197,10 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
    */
   public long bitCount() {
     return bits.bitCount();
+  }
+
+  public void clear() {
+    this.bits.clear();
   }
 
   /**
@@ -517,4 +521,16 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
 	public String toString() {
 		return String.format("BloomFilter[%d bits, %.2f%% filled]", this.bits.bitSize(), this.bits.bitCount * 100d / this.bitSize());
 	}
+
+  public void wrap(long[] data) {
+    BitArray newBits = new BitArray(data);
+    if (this.bits.bitSize() != newBits.bitSize()) {
+      throw new IllegalArgumentException(String.format("Given %d-bit array, need %d bits.", newBits.bitSize(), this.bits.bitSize()));
+    }
+    this.bits = newBits;
+  }
+
+  public long[] exportBits() {
+    return this.bits.data;
+  }
 }

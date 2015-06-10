@@ -180,6 +180,13 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
       return bitCount;
     }
 
+    void clear() {
+      if (this.bitCount > 0) {
+        Arrays.fill(this.data, 0L);
+        this.bitCount = 0;
+      }
+    }
+
     BitArray copy() {
       return new BitArray(data.clone());
     }
