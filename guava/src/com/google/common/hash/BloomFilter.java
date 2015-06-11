@@ -66,21 +66,24 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
    *
    * <p>Implementations should be collections of pure functions (i.e. stateless).
    */
-  interface Strategy extends java.io.Serializable {
+  public interface Strategy extends java.io.Serializable {
 
     /**
      * Sets {@code numHashFunctions} bits of the given bit array, by hashing a user element.
      *
      * <p>Returns whether any bits changed as a result of this operation.
      */
-    <T> boolean put(T object, Funnel<? super T> funnel, int numHashFunctions, BitArray bits);
+    <T> boolean put(T object, Funnel<? super T> funnel, int numHashFunctions, BloomFilterStrategies.HashSink sink);
 
     /**
      * Queries {@code numHashFunctions} bits of the given bit array, by hashing a user element;
      * returns {@code true} if and only if all selected bits are set.
      */
     <T> boolean mightContain(
-        T object, Funnel<? super T> funnel, int numHashFunctions, BitArray bits);
+        T object, Funnel<? super T> funnel, int numHashFunctions, BloomFilterStrategies.HashSink bits);
+
+    <T> int get(
+        T object, Funnel<? super T> funnel, int numHashFunctions, BloomFilterStrategies.HashSink bits);
 
     /**
      * Identifier used to encode this strategy, when marshalled as part of a BloomFilter.
@@ -519,7 +522,8 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
 
 	@Override
 	public String toString() {
-		return String.format("BloomFilter[%d bits, %.2f%% filled]", this.bits.bitSize(), this.bits.bitCount * 100d / this.bitSize());
+		return String.format("BloomFilter[%d bits, %.2f%% filledб %d hash functions]", this.bits.bitSize(),
+        this.bits.bitCount * 100d / this.bitSize(), this.numHashFunctions);
 	}
 
   public void wrap(long[] data) {

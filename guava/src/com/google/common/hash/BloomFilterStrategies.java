@@ -43,8 +43,8 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
    */
   MURMUR128_MITZ_32() {
     @Override public <T> boolean put(T object, Funnel<? super T> funnel,
-        int numHashFunctions, BitArray bits) {
-      long bitSize = bits.bitSize();
+        int numHashFunctions, HashSink sink) {
+      long bitSize = sink.bitSize();
       long hash64 = Hashing.murmur3_128().hashObject(object, funnel).asLong();
       int hash1 = (int) hash64;
       int hash2 = (int) (hash64 >>> 32);
@@ -56,13 +56,39 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
         if (combinedHash < 0) {
           combinedHash = ~combinedHash;
         }
-        bitsChanged |= bits.set(combinedHash % bitSize);
+        bitsChanged |= sink.set(combinedHash % bitSize);
       }
       return bitsChanged;
     }
 
+    @Override
+    public <T> int get(T object, Funnel<? super T> funnel, int numHashFunctions, HashSink bits) {
+      long bitSize = bits.bitSize();
+      long hash64 = Hashing.murmur3_128().hashObject(object, funnel).asLong();
+      int hash1 = (int) hash64;
+      int hash2 = (int) (hash64 >>> 32);
+
+      int minValue = -1;
+      for (int i = 1; i <= numHashFunctions; i++) {
+        int combinedHash = hash1 + (i * hash2);
+        // Flip all the bits if it's negative (guaranteed positive number)
+        if (combinedHash < 0) {
+          combinedHash = ~combinedHash;
+        }
+        int currentValue = bits.get(combinedHash % bitSize);
+        if (currentValue == 0) {
+          return 0;
+        }
+
+        minValue = minValue == -1 ? currentValue : Math.min(minValue, currentValue);
+      }
+      return minValue;
+    }
+
+
+    // Keep this method for efficiency reasosn.
     @Override public <T> boolean mightContain(T object, Funnel<? super T> funnel,
-        int numHashFunctions, BitArray bits) {
+        int numHashFunctions, HashSink bits) {
       long bitSize = bits.bitSize();
       long hash64 = Hashing.murmur3_128().hashObject(object, funnel).asLong();
       int hash1 = (int) hash64;
@@ -74,7 +100,7 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
         if (combinedHash < 0) {
           combinedHash = ~combinedHash;
         }
-        if (!bits.get(combinedHash % bitSize)) {
+        if (bits.get(combinedHash % bitSize) == 0) {
           return false;
         }
       }
@@ -90,8 +116,8 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
   MURMUR128_MITZ_64() {
     @Override
     public <T> boolean put(T object, Funnel<? super T> funnel,
-        int numHashFunctions, BitArray bits) {
-      long bitSize = bits.bitSize();
+        int numHashFunctions, HashSink sink) {
+      long bitSize = sink.bitSize();
       byte[] bytes = Hashing.murmur3_128().hashObject(object, funnel).getBytesInternal();
       long hash1 = lowerEight(bytes);
       long hash2 = upperEight(bytes);
@@ -100,7 +126,7 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
       long combinedHash = hash1;
       for (int i = 0; i < numHashFunctions; i++) {
         // Make the combined hash positive and indexable
-        bitsChanged |= bits.set((combinedHash & Long.MAX_VALUE) % bitSize);
+        bitsChanged |= sink.set((combinedHash & Long.MAX_VALUE) % bitSize);
         combinedHash += hash2;
       }
       return bitsChanged;
@@ -108,7 +134,7 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
 
     @Override
     public <T> boolean mightContain(T object, Funnel<? super T> funnel,
-        int numHashFunctions, BitArray bits) {
+        int numHashFunctions, HashSink bits) {
       long bitSize = bits.bitSize();
       byte[] bytes = Hashing.murmur3_128().hashObject(object, funnel).getBytesInternal();
       long hash1 = lowerEight(bytes);
@@ -117,12 +143,34 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
       long combinedHash = hash1;
       for (int i = 0; i < numHashFunctions; i++) {
         // Make the combined hash positive and indexable
-        if (!bits.get((combinedHash & Long.MAX_VALUE) % bitSize)) {
+        if (bits.get((combinedHash & Long.MAX_VALUE) % bitSize) == 0) {
           return false;
         }
         combinedHash += hash2;
       }
       return true;
+    }
+
+    @Override
+    public <T> int get(T object, Funnel<? super T> funnel,
+        int numHashFunctions, HashSink bits) {
+      long bitSize = bits.bitSize();
+      byte[] bytes = Hashing.murmur3_128().hashObject(object, funnel).getBytesInternal();
+      long hash1 = lowerEight(bytes);
+      long hash2 = upperEight(bytes);
+
+      int minValue = -1;
+      long combinedHash = hash1;
+      for (int i = 0; i < numHashFunctions; i++) {
+        // Make the combined hash positive and indexable
+        int currentValue = bits.get((combinedHash & Long.MAX_VALUE) % bitSize);
+        if (currentValue == 0) {
+          return 0;
+        }
+        minValue = minValue == -1 ? currentValue : Math.min(minValue, currentValue);
+        combinedHash += hash2;
+      }
+      return minValue;
     }
 
     private /* static */ long lowerEight(byte[] bytes) {
@@ -136,8 +184,23 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
     }
   };
 
+  /**
+   * Receives hash values from a Bloom filter strategy and updates accordingly.
+   */
+  static interface HashSink {
+
+    /** @return the number of settable positions in this sink. */
+    long bitSize();
+
+    /** Updates this sink at the given index and return if an effective change occurred. */
+    boolean set(long index);
+
+    int get(long index);
+
+  }
+
   // Note: We use this instead of java.util.BitSet because we need access to the long[] data field
-  static final class BitArray {
+  static final class BitArray implements HashSink {
     final long[] data;
     long bitCount;
 
@@ -157,8 +220,8 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
     }
 
     /** Returns true if the bit changed value. */
-    boolean set(long index) {
-      if (!get(index)) {
+    public boolean set(long index) {
+      if (get(index) == 0) {
         data[(int) (index >>> 6)] |= (1L << index);
         bitCount++;
         return true;
@@ -166,12 +229,12 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
       return false;
     }
 
-    boolean get(long index) {
-      return (data[(int) (index >>> 6)] & (1L << index)) != 0;
+    public int get(long index) {
+      return (int) ((data[(int) (index >>> 6)] >>> index) & 1L);
     }
 
     /** Number of bits */
-    long bitSize() {
+    public long bitSize() {
       return (long) data.length * Long.SIZE;
     }
 
@@ -221,5 +284,96 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
       return false;
     }
 
+  }
+
+
+  static final class IntArray implements HashSink {
+    final long[] data;
+    final int bitsPerInt;
+    final int intBitMask;
+
+    IntArray(long ints, int bitsPerInt) {
+      this(new long[Ints.checkedCast(LongMath.divide(LongMath.checkedMultiply(ints, bitsPerInt), 64, RoundingMode.CEILING))], bitsPerInt);
+    }
+
+    // Used by serialization
+    IntArray(long[] data, int bitsPerInt) {
+      checkArgument(data.length > 0, "data length is zero!");
+      this.data = data;
+      this.bitsPerInt = bitsPerInt;
+      int bitMask = 0;
+      for (int i = 0; i < this.bitsPerInt; i++) {
+        bitMask = (bitMask << 1) | 0x1;
+      }
+      this.intBitMask = bitMask;
+    }
+
+    /** Returns true if the bit changed value. */
+    public boolean set(long index) {
+      // Load the current value.
+      long value = get(index) & 0xFFFFFFFFL;
+      if (value == this.bitsPerInt) return false;
+
+      // Find the bits, we have to update.
+      long incValue = value + 1;
+      long updateBitMask = value ^ incValue;
+
+      // Determine the first and last bit index.
+      long startIndex = index * this.bitsPerInt;
+
+      // Determine if the int is distributed among two longs.
+      int startLong = (int) (startIndex >>> 6);
+      int offset = (int) (64 + (startIndex & 0xFFFFFFC0L) - startIndex - this.bitsPerInt);
+      if (offset >= 0) {
+        // If the offset is positive, we need only update the first long.
+        data[startLong] ^= updateBitMask << offset;
+      } else {
+        // If the offset is negative, we need to update two longs.
+        data[startLong] ^= (updateBitMask >>> -offset);
+        // Furthermore, we need to load the next long to provide the missing right-hand side bits.
+        data[startLong] ^= (updateBitMask << (64 + offset));
+      }
+
+      return true;
+    }
+
+    public int get(long index) {
+      // Determine the first and last bit index.
+      long startIndex = index * this.bitsPerInt;
+
+      // Determine if the int is distributed among two longs.
+      int startLong = (int) (startIndex >>> 6);
+      int offset = (int) (64 + (startIndex & 0xFFFFFFC0L) - startIndex - this.bitsPerInt);
+      if (offset >= 0) {
+        // If the offset is positive, we need to push the long to the right and scrap the left-hand remainder.
+        return ((int) (data[startLong] >>> offset)) & this.intBitMask;
+      } else {
+        // If the offset is negative, we need to push the long to left, scrap the left hand remainder.
+        int result = ((int) (data[startLong] << -offset)) & this.intBitMask;
+        // Furthermore, we need to load the next long to provide the missing right-hand side bits.
+        return result | (int) (data[startLong + 1] >>> (64 + offset));
+      }
+    }
+
+    /** Number of bits */
+    public long bitSize() {
+      return (long) data.length * Long.SIZE / this.bitsPerInt;
+    }
+
+    BitArray copy() {
+      return new BitArray(data.clone());
+    }
+
+    @Override public boolean equals(Object o) {
+      if (o instanceof BitArray) {
+        BitArray bitArray = (BitArray) o;
+        return Arrays.equals(data, bitArray.data);
+      }
+      return false;
+    }
+
+    public int getNumBitsPerPosition() {
+      return this.bitsPerInt;
+    }
   }
 }
