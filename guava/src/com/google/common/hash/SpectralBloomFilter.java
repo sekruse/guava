@@ -412,6 +412,6 @@ public final class SpectralBloomFilter<T> {
   }
 
   public int getMaxValue() {
-    return (1 << this.ints.getNumBitsPerPosition()) - 1;
+    return this.ints.getValueBitMask();
   }
 }

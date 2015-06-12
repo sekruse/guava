@@ -29,7 +29,7 @@ public final class IntArray implements HashSink<IntArray> {
     checkArgument(data.length > 0, "data length is zero!");
     this.data = data;
     this.bitsPerInt = bitsPerInt;
-    this.intBitMask = (1 << this.bitsPerInt) - 1;
+    this.intBitMask = (int) ((1L << this.bitsPerInt) - 1);
   }
 
   /**
