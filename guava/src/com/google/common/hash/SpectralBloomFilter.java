@@ -119,6 +119,10 @@ public final class SpectralBloomFilter<T> {
     }
   }
 
+  public void clear() {
+    this.ints.clear();
+  }
+
 //  /**
 //   * Returns the probability that {@linkplain #mightContain(Object)} will erroneously return
 //   * {@code true} for an object that has not actually been put in the {@code BloomFilter}.
