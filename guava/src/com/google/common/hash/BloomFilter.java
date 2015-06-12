@@ -14,17 +14,16 @@
 
 package com.google.common.hash;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
-
 import com.google.common.annotations.Beta;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Objects;
 import com.google.common.base.Predicate;
-import com.google.common.hash.BloomFilterStrategies.BitArray;
+import com.google.common.hash.data.BitArray;
 import com.google.common.primitives.SignedBytes;
 import com.google.common.primitives.UnsignedBytes;
 
+import javax.annotation.CheckReturnValue;
+import javax.annotation.Nullable;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -32,8 +31,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.Serializable;
 
-import javax.annotation.CheckReturnValue;
-import javax.annotation.Nullable;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
 
 /**
  * A Bloom filter for instances of {@code T}. A Bloom filter offers an approximate containment test
@@ -61,39 +60,6 @@ import javax.annotation.Nullable;
  */
 @Beta
 public final class BloomFilter<T> implements Predicate<T>, Serializable {
-  /**
-   * A strategy to translate T instances, to {@code numHashFunctions} bit indexes.
-   *
-   * <p>Implementations should be collections of pure functions (i.e. stateless).
-   */
-  public interface Strategy extends java.io.Serializable {
-
-    /**
-     * Sets {@code numHashFunctions} bits of the given bit array, by hashing a user element.
-     *
-     * <p>Returns whether any bits changed as a result of this operation.
-     */
-    <T> boolean put(T object, Funnel<? super T> funnel, int numHashFunctions, BloomFilterStrategies.HashSink sink);
-
-    /**
-     * Queries {@code numHashFunctions} bits of the given bit array, by hashing a user element;
-     * returns {@code true} if and only if all selected bits are set.
-     */
-    <T> boolean mightContain(
-        T object, Funnel<? super T> funnel, int numHashFunctions, BloomFilterStrategies.HashSink bits);
-
-    <T> int get(
-        T object, Funnel<? super T> funnel, int numHashFunctions, BloomFilterStrategies.HashSink bits);
-
-    /**
-     * Identifier used to encode this strategy, when marshalled as part of a BloomFilter.
-     * Only values in the [-128, 127] range are valid for the compact serial form.
-     * Non-negative values are reserved for enums defined in BloomFilterStrategies;
-     * negative values are reserved for any custom, stateful strategy we may define
-     * (e.g. any kind of strategy that would depend on user input).
-     */
-    int ordinal();
-  }
 
   /** The bit set of the BloomFilter (not necessarily power of 2!)*/
   private BitArray bits;
@@ -107,13 +73,13 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
   /**
    * The strategy we employ to map an element T to {@code numHashFunctions} bit indexes.
    */
-  private final Strategy strategy;
+  private final BloomFilterStrategy strategy;
 
   /**
    * Creates a BloomFilter.
    */
-  private BloomFilter(BitArray bits, int numHashFunctions, Funnel<? super T> funnel,
-      Strategy strategy) {
+  BloomFilter(BitArray bits, int numHashFunctions, Funnel<? super T> funnel,
+      BloomFilterStrategy strategy) {
     checkArgument(numHashFunctions > 0,
         "numHashFunctions (%s) must be > 0", numHashFunctions);
     checkArgument(numHashFunctions <= 255,
@@ -122,17 +88,6 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
     this.numHashFunctions = numHashFunctions;
     this.funnel = checkNotNull(funnel);
     this.strategy = checkNotNull(strategy);
-  }
-
-  /**
-   * Creates a new {@code BloomFilter} that's a copy of this instance. The new instance is equal to
-   * this instance but shares no mutable state.
-   *
-   * @since 12.0
-   */
-  @CheckReturnValue
-  public BloomFilter<T> copy() {
-    return new BloomFilter<T>(bits.copy(), numHashFunctions, funnel, strategy);
   }
 
   /**
@@ -176,7 +131,7 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
    * {@code true} for an object that has not actually been put in the {@code BloomFilter}.
    *
    * <p>Ideally, this number should be close to the {@code fpp} parameter
-   * passed in {@linkplain #create(Funnel, long, double, Strategy)}, or smaller. If it is
+   * passed in {@linkplain #create(Funnel, long, double, BloomFilterStrategy)}, or smaller. If it is
    * significantly higher, it is usually the case that too many elements (more than
    * expected) have been put in the {@code BloomFilter}, degenerating it.
    *
@@ -185,22 +140,34 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
   @CheckReturnValue
   public double expectedFpp() {
     // You down with FPP? (Yeah you know me!) Who's down with FPP? (Every last homie!)
-    return Math.pow((double) bits.bitCount() / bitSize(), numHashFunctions);
+    return Math.pow((double) bitCount() / bitSize(), numHashFunctions);
   }
 
   /**
    * Returns the number of bits in the underlying bit array.
    */
   public long bitSize() {
-    return bits.bitSize();
+    return bits.positionSize();
   }
 
   /**
    * Returns the number of set bits in the underlying bit array.
    */
   public long bitCount() {
-    return bits.bitCount();
+    return bits.positionCount();
   }
+
+  /**
+   * Creates a new {@code BloomFilter} that's a copy of this instance. The new instance is equal to
+   * this instance but shares no mutable state.
+   *
+   * @since 12.0
+   */
+  @CheckReturnValue
+  public BloomFilter<T> copy() {
+    return new BloomFilter<T>(bits.copy(), numHashFunctions, funnel, strategy);
+  }
+
 
   public void clear() {
     this.bits.clear();
@@ -335,7 +302,7 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
 
   @VisibleForTesting
   static <T> BloomFilter<T> create(
-      Funnel<? super T> funnel, long expectedInsertions, double fpp, Strategy strategy) {
+      Funnel<? super T> funnel, long expectedInsertions, double fpp, BloomFilterStrategy strategy) {
     checkNotNull(funnel);
     checkArgument(expectedInsertions >= 0, "Expected insertions (%s) must be >= 0",
         expectedInsertions);
@@ -437,10 +404,10 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
     final long[] data;
     final int numHashFunctions;
     final Funnel<? super T> funnel;
-    final Strategy strategy;
+    final BloomFilterStrategy strategy;
 
     SerialForm(BloomFilter<T> bf) {
-      this.data = bf.bits.data;
+      this.data = bf.bits.getRawData();
       this.numHashFunctions = bf.numHashFunctions;
       this.funnel = bf.funnel;
       this.strategy = bf.strategy;
@@ -469,8 +436,9 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
     DataOutputStream dout = new DataOutputStream(out);
     dout.writeByte(SignedBytes.checkedCast(strategy.ordinal()));
     dout.writeByte(UnsignedBytes.checkedCast(numHashFunctions)); // note: checked at the c'tor
-    dout.writeInt(bits.data.length);
-    for (long value : bits.data) {
+    long[] data = bits.getRawData();
+    dout.writeInt(data.length);
+    for (long value : data) {
       dout.writeLong(value);
     }
   }
@@ -503,7 +471,7 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
       numHashFunctions = UnsignedBytes.toInt(din.readByte());
       dataLength = din.readInt();
 
-      Strategy strategy = BloomFilterStrategies.values()[strategyOrdinal];
+      BloomFilterStrategy strategy = BloomFilterStrategies.values()[strategyOrdinal];
       long[] data = new long[dataLength];
       for (int i = 0; i < data.length; i++) {
         data[i] = din.readLong();
@@ -522,19 +490,19 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
 
 	@Override
 	public String toString() {
-		return String.format("BloomFilter[%d bits, %.2f%% filledб %d hash functions]", this.bits.bitSize(),
-        this.bits.bitCount * 100d / this.bitSize(), this.numHashFunctions);
+		return String.format("BloomFilter[%s bits, %.2f%% filled, %s hash functions]", this.bits.positionSize(),
+        this.bits.positionCount() * 100d / this.bitSize(), this.numHashFunctions);
 	}
 
   public void wrap(long[] data) {
     BitArray newBits = new BitArray(data);
-    if (this.bits.bitSize() != newBits.bitSize()) {
-      throw new IllegalArgumentException(String.format("Given %d-bit array, need %d bits.", newBits.bitSize(), this.bits.bitSize()));
+    if (this.bits.positionSize() != newBits.positionSize()) {
+      throw new IllegalArgumentException(String.format("Given %d-bit array, need %d bits.", newBits.positionSize(), this.bits.positionSize()));
     }
     this.bits = newBits;
   }
 
   public long[] exportBits() {
-    return this.bits.data;
+    return this.bits.getRawData();
   }
 }

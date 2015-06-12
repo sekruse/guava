@@ -16,7 +16,7 @@
 
 package com.google.common.hash;
 
-import com.google.common.hash.BloomFilterStrategies.BitArray;
+import com.google.common.hash.data.BitArray;
 import com.google.common.testing.AbstractPackageSanityTests;
 
 /**

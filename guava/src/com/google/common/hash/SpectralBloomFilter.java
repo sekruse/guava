@@ -16,18 +16,23 @@ package com.google.common.hash;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Objects;
-import com.google.common.hash.BloomFilter.Strategy;
+import com.google.common.hash.data.BitArray;
+import com.google.common.hash.data.IntArray;
 
 import javax.annotation.CheckReturnValue;
 import javax.annotation.Nullable;
 
+import java.util.Arrays;
+
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 
-public final class CountingBloomFilter<T> {
+public final class SpectralBloomFilter<T> {
 
-  /** The bit set of the BloomFilter (not necessarily power of 2!)*/
-  private BloomFilterStrategies.IntArray bits;
+  private final long numPositions;
+
+  /** The array that stores the ints for the spectral Bloom filter. */
+  private IntArray ints;
 
   /** Number of hashes per element */
   private final int numHashFunctions;
@@ -40,22 +45,34 @@ public final class CountingBloomFilter<T> {
   /**
    * The strategy we employ to map an element T to {@code numHashFunctions} bit indexes.
    */
-  private final Strategy strategy;
+  private final BloomFilterStrategy strategy;
+
+  /**
+   * Aggregates operations into a transaction.
+   */
+  private BitArray transactionCache;
+
+  /**
+   * Reuse object to return the minimum count positions for a certain object. Operations that use this object should
+   * clean it afterwards and must not be called recursively nor concurrently, of course!
+   */
+  private long[] minPositions;
 
   /**
    * Creates a BloomFilter.
    */
-  private CountingBloomFilter(BloomFilterStrategies.IntArray bits, int numHashFunctions, Funnel<? super T> funnel,
-                              Strategy strategy) {
+  private SpectralBloomFilter(long numPositions, int numBitsPerPosition, int numHashFunctions, Funnel<? super T> funnel,
+                              BloomFilterStrategy strategy) {
     checkArgument(numHashFunctions > 0,
         "numHashFunctions (%s) must be > 0", numHashFunctions);
     checkArgument(numHashFunctions <= 255,
         "numHashFunctions (%s) must be <= 255", numHashFunctions);
-    this.bits = checkNotNull(bits);
+    this.ints = new IntArray(numPositions, numBitsPerPosition);
+    this.numPositions = numPositions;
+    this.numBitsPerPosition = ints.getNumBitsPerPosition();
     this.numHashFunctions = numHashFunctions;
     this.funnel = checkNotNull(funnel);
     this.strategy = checkNotNull(strategy);
-    this.numBitsPerPosition = bits.getNumBitsPerPosition();
   }
 
   /**
@@ -64,23 +81,42 @@ public final class CountingBloomFilter<T> {
    */
   @CheckReturnValue
   public int getCount(T object) {
-    return strategy.get(object, funnel, numHashFunctions, bits);
+    return strategy.get(object, funnel, numHashFunctions, ints);
+  }
+
+  public void put(T object) {
+    long[] minPositions = getMinPositions();
+    int numMinPositions = strategy.getMinPositions(object, this.funnel, this.numHashFunctions, this.ints, minPositions);
+    // It might happen that some positions occurred twice. Deal with it!
+    Arrays.sort(minPositions, 0, numMinPositions);
+    long lastPosition = -1;
+    for (int minPositionIndex = 0; minPositionIndex < numMinPositions; minPositionIndex++) {
+      long minPosition = minPositions[minPositionIndex];
+      if (lastPosition != minPosition) {
+        this.ints.set(minPosition);
+        lastPosition = minPosition;
+      }
+    }
   }
 
   /**
-   * Puts an element into this {@code BloomFilter}. Ensures that subsequent invocations of
-   * {@link #mightContain(Object)} with the same element will always return {@code true}.
-   *
-   * @return true if the bloom filter's bits changed as a result of this operation. If the bits
-   *     changed, this is <i>definitely</i> the first time {@code object} has been added to the
-   *     filter. If the bits haven't changed, this <i>might</i> be the first time {@code object}
-   *     has been added to the filter. Note that {@code put(t)} always returns the
-   *     <i>opposite</i> result to what {@code mightContain(t)} would have returned at the time
-   *     it is called."
-   * @since 12.0 (present in 11.0 with {@code void} return type})
+   * For the given object, find all the current minimum counts in the current spectral filter and mark these to be
+   * updated.
    */
-  public boolean put(T object) {
-    return strategy.put(object, funnel, numHashFunctions, bits);
+  public void putToBatch(T object) {
+    BitArray transactionCache = getTransactionCache();
+    long[] minPositions = getMinPositions();
+    int numMinPositions = strategy.getMinPositions(object, this.funnel, this.numHashFunctions, this.ints, minPositions);
+    for (int minPositionIndex = 0; minPositionIndex < numMinPositions; minPositionIndex++) {
+      transactionCache.set(minPositions[minPositionIndex]);
+    }
+  }
+
+  public void executeBatch() {
+    BitArray.LongIterator iterator = getTransactionCache().clearingIterator();
+    while (iterator.hasNext()) {
+      this.ints.set(iterator.next());
+    }
   }
 
 //  /**
@@ -97,25 +133,25 @@ public final class CountingBloomFilter<T> {
 //  @CheckReturnValue
 //  public double expectedFpp() {
 //    // You down with FPP? (Yeah you know me!) Who's down with FPP? (Every last homie!)
-//    return Math.pow((double) bits.bitCount() / bitSize(), numHashFunctions);
+//    return Math.pow((double) ints.bitCount() / positionSize(), numHashFunctions);
 //  }
 
   /**
-   * Returns the number of bits in the underlying bit array.
+   * Returns the number of ints in the underlying bit array.
    */
-  public long bitSize() {
-    return bits.bitSize();
+  public long size() {
+    return ints.positionSize();
   }
 
 //  /**
-//   * Returns the number of set bits in the underlying bit array.
+//   * Returns the number of set ints in the underlying bit array.
 //   */
 //  public long bitCount() {
-//    return bits.bitCount();
+//    return ints.bitCount();
 //  }
 
 //  public void clear() {
-//    this.bits.clear();
+//    this.ints.clear();
 //  }
 
   /**
@@ -134,42 +170,42 @@ public final class CountingBloomFilter<T> {
    * @since 15.0
    */
   @CheckReturnValue
-  public boolean isCompatible(CountingBloomFilter<T> that) {
+  public boolean isCompatible(SpectralBloomFilter<T> that) {
     checkNotNull(that);
     return (this != that) &&
         (this.numHashFunctions == that.numHashFunctions) &&
-        (this.bitSize() == that.bitSize()) &&
+        (this.size() == that.size()) &&
         (this.strategy.equals(that.strategy)) &&
         (this.funnel.equals(that.funnel));
   }
 
-//  /**
-//   * Combines this bloom filter with another bloom filter by performing a bitwise OR of the
-//   * underlying data. The mutations happen to <b>this</b> instance. Callers must ensure the
-//   * bloom filters are appropriately sized to avoid saturating them.
-//   *
-//   * @param that The bloom filter to combine this bloom filter with. It is not mutated.
-//   * @throws IllegalArgumentException if {@code isCompatible(that) == false}
-//   *
-//   * @since 15.0
-//   */
-//  public void putAll(CountingBloomFilter<T> that) {
-//    checkNotNull(that);
-//    checkArgument(this != that, "Cannot combine a BloomFilter with itself.");
-//    checkArgument(this.numHashFunctions == that.numHashFunctions,
-//        "BloomFilters must have the same number of hash functions (%s != %s)",
-//        this.numHashFunctions, that.numHashFunctions);
-//    checkArgument(this.bitSize() == that.bitSize(),
-//        "BloomFilters must have the same size underlying bit arrays (%s != %s)",
-//        this.bitSize(), that.bitSize());
-//    checkArgument(this.strategy.equals(that.strategy),
-//        "BloomFilters must have equal strategies (%s != %s)",
-//        this.strategy, that.strategy);
-//    checkArgument(this.funnel.equals(that.funnel),
-//        "BloomFilters must have equal funnels (%s != %s)",
-//        this.funnel, that.funnel);
-//    this.bits.putAll(that.bits);
-//  }
+  /**
+   * Combines this bloom filter with another bloom filter by performing a bitwise OR of the
+   * underlying data. The mutations happen to <b>this</b> instance. Callers must ensure the
+   * bloom filters are appropriately sized to avoid saturating them.
+   *
+   * @param that The bloom filter to combine this bloom filter with. It is not mutated.
+   * @throws IllegalArgumentException if {@code isCompatible(that) == false}
+   *
+   * @since 15.0
+   */
+  public void putAll(SpectralBloomFilter<T> that) {
+    checkNotNull(that);
+    checkArgument(this != that, "Cannot combine a BloomFilter with itself.");
+    checkArgument(this.numHashFunctions == that.numHashFunctions,
+        "BloomFilters must have the same number of hash functions (%s != %s)",
+        this.numHashFunctions, that.numHashFunctions);
+    checkArgument(this.size() == that.size(),
+        "BloomFilters must have the same size underlying bit arrays (%s != %s)",
+        this.size(), that.size());
+    checkArgument(this.strategy.equals(that.strategy),
+        "BloomFilters must have equal strategies (%s != %s)",
+        this.strategy, that.strategy);
+    checkArgument(this.funnel.equals(that.funnel),
+        "BloomFilters must have equal funnels (%s != %s)",
+        this.funnel, that.funnel);
+    this.ints.putAll(that.ints);
+  }
 
 //  /**
 //   * Combines this bloom filter with another bloom filter by performing a bitwise AND of the
@@ -186,16 +222,16 @@ public final class CountingBloomFilter<T> {
 //    checkArgument(this.numHashFunctions == that.numHashFunctions,
 //        "BloomFilters must have the same number of hash functions (%s != %s)",
 //        this.numHashFunctions, that.numHashFunctions);
-//    checkArgument(this.bitSize() == that.bitSize(),
+//    checkArgument(this.size() == that.size(),
 //        "BloomFilters must have the same size underlying bit arrays (%s != %s)",
-//        this.bitSize(), that.bitSize());
+//        this.size(), that.size());
 //    checkArgument(this.strategy.equals(that.strategy),
 //        "BloomFilters must have equal strategies (%s != %s)",
 //        this.strategy, that.strategy);
 //    checkArgument(this.funnel.equals(that.funnel),
 //        "BloomFilters must have equal funnels (%s != %s)",
 //        this.funnel, that.funnel);
-//    this.bits.intersect(that.bits);
+//    this.ints.intersect(that.ints);
 //  }
 
   @Override
@@ -203,11 +239,11 @@ public final class CountingBloomFilter<T> {
     if (object == this) {
       return true;
     }
-    if (object instanceof CountingBloomFilter) {
-      CountingBloomFilter<?> that = (CountingBloomFilter<?>) object;
+    if (object instanceof SpectralBloomFilter) {
+      SpectralBloomFilter<?> that = (SpectralBloomFilter<?>) object;
       return this.numHashFunctions == that.numHashFunctions
           && this.funnel.equals(that.funnel)
-          && this.bits.equals(that.bits)
+          && this.ints.equals(that.ints)
           && this.strategy.equals(that.strategy);
     }
     return false;
@@ -215,11 +251,11 @@ public final class CountingBloomFilter<T> {
 
   @Override
   public int hashCode() {
-    return Objects.hashCode(numHashFunctions, funnel, strategy, bits);
+    return Objects.hashCode(numHashFunctions, funnel, strategy, ints);
   }
 
   /**
-   * Creates a {@link CountingBloomFilter BloomFilter<T>} with the expected number of
+   * Creates a {@link SpectralBloomFilter BloomFilter<T>} with the expected number of
    * insertions and expected false positive probability.
    *
    * <p>Note that overflowing a {@code BloomFilter} with significantly more elements
@@ -240,14 +276,14 @@ public final class CountingBloomFilter<T> {
    * @return a {@code BloomFilter}
    */
   @CheckReturnValue
-  public static <T> CountingBloomFilter<T> create(int numBitsPerPosition,
+  public static <T> SpectralBloomFilter<T> create(int numBitsPerPosition,
       Funnel<? super T> funnel, long expectedInsertions, double fpp) {
     return create(numBitsPerPosition, funnel, expectedInsertions, fpp, BloomFilterStrategies.MURMUR128_MITZ_64);
   }
 
   @VisibleForTesting
-  static <T> CountingBloomFilter<T> create(int numBitsPerPosition,
-      Funnel<? super T> funnel, long expectedInsertions, double fpp, Strategy strategy) {
+  static <T> SpectralBloomFilter<T> create(int numBitsPerPosition,
+      Funnel<? super T> funnel, long expectedInsertions, double fpp, BloomFilterStrategy strategy) {
     checkNotNull(funnel);
     checkArgument(expectedInsertions >= 0, "Expected insertions (%s) must be >= 0",
         expectedInsertions);
@@ -267,15 +303,15 @@ public final class CountingBloomFilter<T> {
     long numBits = optimalNumOfBits(expectedInsertions, fpp);
     int numHashFunctions = optimalNumOfHashFunctions(expectedInsertions, numBits);
     try {
-      return new CountingBloomFilter<T>(new BloomFilterStrategies.IntArray(numBits, numBitsPerPosition),
+      return new SpectralBloomFilter<T>(numBits, numBitsPerPosition,
           numHashFunctions, funnel, strategy);
     } catch (IllegalArgumentException e) {
-      throw new IllegalArgumentException("Could not create BloomFilter of " + numBits + " bits", e);
+      throw new IllegalArgumentException("Could not create BloomFilter of " + numBits + " ints", e);
     }
   }
 
   /**
-   * Creates a {@link CountingBloomFilter BloomFilter<T>} with the expected number of
+   * Creates a {@link SpectralBloomFilter BloomFilter<T>} with the expected number of
    * insertions and a default expected false positive probability of 3%.
    *
    * <p>Note that overflowing a {@code BloomFilter} with significantly more elements
@@ -291,7 +327,7 @@ public final class CountingBloomFilter<T> {
    * @return a {@code BloomFilter}
    */
   @CheckReturnValue
-  public static <T> CountingBloomFilter<T> create(int numBitPerPosition,
+  public static <T> SpectralBloomFilter<T> create(int numBitPerPosition,
       Funnel<? super T> funnel, long expectedInsertions) {
     return create(numBitPerPosition, funnel, expectedInsertions, 0.03); // FYI, for 3%, we always get 5 hash functions
   }
@@ -299,9 +335,9 @@ public final class CountingBloomFilter<T> {
   /*
    * Cheat sheet:
    *
-   * m: total bits
+   * m: total ints
    * n: expected insertions
-   * b: m/n, bits per insertion
+   * b: m/n, ints per insertion
    * p: expected false positive probability
    *
    * 1) Optimal k = b * ln2
@@ -312,12 +348,12 @@ public final class CountingBloomFilter<T> {
 
   /**
    * Computes the optimal k (number of hashes per element inserted in Bloom filter), given the
-   * expected insertions and total number of bits in the Bloom filter.
+   * expected insertions and total number of ints in the Bloom filter.
    *
    * See http://en.wikipedia.org/wiki/File:Bloom_filter_fp_probability.svg for the formula.
    *
    * @param n expected insertions (must be positive)
-   * @param m total number of bits in Bloom filter (must be positive)
+   * @param m total number of ints in Bloom filter (must be positive)
    */
   @VisibleForTesting
   static int optimalNumOfHashFunctions(long n, long m) {
@@ -326,7 +362,7 @@ public final class CountingBloomFilter<T> {
   }
 
   /**
-   * Computes m (total bits of Bloom filter) which is expected to achieve, for the specified
+   * Computes m (total ints of Bloom filter) which is expected to achieve, for the specified
    * expected insertions, the required false positive probability.
    *
    * See http://en.wikipedia.org/wiki/Bloom_filter#Probability_of_false_positives for the formula.
@@ -345,18 +381,37 @@ public final class CountingBloomFilter<T> {
 
 	@Override
 	public String toString() {
-		return String.format("BloomFilter[%d bits, %d hash functions]", this.bits.bitSize(),  this.numHashFunctions);
+		return String.format("SpectralBloomFilter[%s %sbit-ints, %.2f%% filled, %s hash functions]", this.numPositions,
+        this.numBitsPerPosition, this.ints.positionCount() * 100d / this.size(), this.numHashFunctions);
 	}
 
   public void wrap(long[] data) {
-    BloomFilterStrategies.IntArray newBits = new BloomFilterStrategies.IntArray(data, this.numBitsPerPosition);
-    if (this.bits.bitSize() != newBits.bitSize()) {
-      throw new IllegalArgumentException(String.format("Given %d-bit array, need %d bits.", newBits.bitSize(), this.bits.bitSize()));
+    IntArray newBits = new IntArray(data, this.numBitsPerPosition);
+    if (this.ints.positionSize() != newBits.positionSize()) {
+      throw new IllegalArgumentException(String.format("Given %d-bit array, need %d ints.", newBits.positionSize(), this.ints.positionSize()));
     }
-    this.bits = newBits;
+    this.ints = newBits;
   }
 
   public long[] exportBits() {
-    return this.bits.data;
+    return this.ints.getRawData();
+  }
+
+  private BitArray getTransactionCache() {
+    if (this.transactionCache == null) {
+      this.transactionCache = new BitArray(this.numPositions);
+    }
+    return this.transactionCache;
+  }
+
+  public long[] getMinPositions() {
+    if (this.minPositions == null) {
+      this.minPositions = new long[this.numHashFunctions];
+    }
+    return this.minPositions;
+  }
+
+  public int getMaxValue() {
+    return (1 << this.ints.getNumBitsPerPosition()) - 1;
   }
 }

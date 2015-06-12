@@ -17,7 +17,8 @@
 package com.google.common.hash;
 
 import static com.google.common.base.Charsets.UTF_8;
-import static com.google.common.hash.BloomFilterStrategies.BitArray;
+
+import com.google.common.hash.data.BitArray;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.common.math.LongMath;
@@ -47,10 +48,10 @@ public class BloomFilterTest extends TestCase {
 
     BitArray bitArray = new BitArray(numBits);
     assertTrue(
-        "BitArray.bitSize() must return a positive number, but was " + bitArray.bitSize(),
-        bitArray.bitSize() > 0);
+        "BitArray.positionSize() must return a positive number, but was " + bitArray.positionSize(),
+        bitArray.positionSize() > 0);
 
-    // Ideally we would also test the bitSize() overflow of this BF, but it runs out of heap space
+    // Ideally we would also test the positionSize() overflow of this BF, but it runs out of heap space
     // BloomFilter.create(Funnels.unencodedCharsFunnel(), 244412641, 1e-11);
   }
 

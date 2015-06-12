@@ -16,12 +16,8 @@ package com.google.common.hash;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-import com.google.common.math.LongMath;
-import com.google.common.primitives.Ints;
+import com.google.common.hash.data.HashSink;
 import com.google.common.primitives.Longs;
-
-import java.math.RoundingMode;
-import java.util.Arrays;
 
 /**
  * Collections of strategies of generating the k * log(M) bits required for an element to
@@ -35,7 +31,7 @@ import java.util.Arrays;
  * @author Dimitris Andreou
  * @author Kurt Alfred Kluever
  */
-enum BloomFilterStrategies implements BloomFilter.Strategy {
+public enum BloomFilterStrategies implements BloomFilterStrategy {
   /**
    * See "Less Hashing, Same Performance: Building a Better Bloom Filter" by Adam Kirsch and
    * Michael Mitzenmacher. The paper argues that this trick doesn't significantly deteriorate the
@@ -44,7 +40,7 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
   MURMUR128_MITZ_32() {
     @Override public <T> boolean put(T object, Funnel<? super T> funnel,
         int numHashFunctions, HashSink sink) {
-      long bitSize = sink.bitSize();
+      long bitSize = sink.positionSize();
       long hash64 = Hashing.murmur3_128().hashObject(object, funnel).asLong();
       int hash1 = (int) hash64;
       int hash2 = (int) (hash64 >>> 32);
@@ -63,7 +59,7 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
 
     @Override
     public <T> int get(T object, Funnel<? super T> funnel, int numHashFunctions, HashSink bits) {
-      long bitSize = bits.bitSize();
+      long bitSize = bits.positionSize();
       long hash64 = Hashing.murmur3_128().hashObject(object, funnel).asLong();
       int hash1 = (int) hash64;
       int hash2 = (int) (hash64 >>> 32);
@@ -85,11 +81,41 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
       return minValue;
     }
 
+    @Override
+    public <T> int getMinPositions(T object, Funnel<? super T> funnel, int numHashFunctions, HashSink bits, long[] collector) {
+      long bitSize = bits.positionSize();
+      long hash64 = Hashing.murmur3_128().hashObject(object, funnel).asLong();
+      int hash1 = (int) hash64;
+      int hash2 = (int) (hash64 >>> 32);
+
+      int minValue = -1;
+      int nextMinPos = 0;
+      for (int i = 1; i <= numHashFunctions; i++) {
+        int combinedHash = hash1 + (i * hash2);
+        // Flip all the bits if it's negative (guaranteed positive number)
+        if (combinedHash < 0) {
+          combinedHash = ~combinedHash;
+        }
+        long effectiveHash = combinedHash % bitSize;
+        int currentValue = bits.get(effectiveHash);
+        if (currentValue > minValue) {
+          minValue = currentValue;
+          collector[0] = effectiveHash;
+          nextMinPos = 1;
+        } else if (currentValue == minValue) {
+          collector[nextMinPos++] = effectiveHash;
+        }
+
+      }
+
+      return nextMinPos;
+    }
+
 
     // Keep this method for efficiency reasosn.
     @Override public <T> boolean mightContain(T object, Funnel<? super T> funnel,
         int numHashFunctions, HashSink bits) {
-      long bitSize = bits.bitSize();
+      long bitSize = bits.positionSize();
       long hash64 = Hashing.murmur3_128().hashObject(object, funnel).asLong();
       int hash1 = (int) hash64;
       int hash2 = (int) (hash64 >>> 32);
@@ -117,7 +143,7 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
     @Override
     public <T> boolean put(T object, Funnel<? super T> funnel,
         int numHashFunctions, HashSink sink) {
-      long bitSize = sink.bitSize();
+      long bitSize = sink.positionSize();
       byte[] bytes = Hashing.murmur3_128().hashObject(object, funnel).getBytesInternal();
       long hash1 = lowerEight(bytes);
       long hash2 = upperEight(bytes);
@@ -135,7 +161,7 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
     @Override
     public <T> boolean mightContain(T object, Funnel<? super T> funnel,
         int numHashFunctions, HashSink bits) {
-      long bitSize = bits.bitSize();
+      long bitSize = bits.positionSize();
       byte[] bytes = Hashing.murmur3_128().hashObject(object, funnel).getBytesInternal();
       long hash1 = lowerEight(bytes);
       long hash2 = upperEight(bytes);
@@ -152,9 +178,8 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
     }
 
     @Override
-    public <T> int get(T object, Funnel<? super T> funnel,
-        int numHashFunctions, HashSink bits) {
-      long bitSize = bits.bitSize();
+    public <T> int get(T object, Funnel<? super T> funnel, int numHashFunctions, HashSink bits) {
+      long bitSize = bits.positionSize();
       byte[] bytes = Hashing.murmur3_128().hashObject(object, funnel).getBytesInternal();
       long hash1 = lowerEight(bytes);
       long hash2 = upperEight(bytes);
@@ -173,6 +198,36 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
       return minValue;
     }
 
+    @Override
+    public <T> int getMinPositions(T object, Funnel<? super T> funnel, int numHashFunctions, HashSink bits,
+                                   long[] collector) {
+
+      long bitSize = bits.positionSize();
+      byte[] bytes = Hashing.murmur3_128().hashObject(object, funnel).getBytesInternal();
+      long hash1 = lowerEight(bytes);
+      long hash2 = upperEight(bytes);
+
+      int minValue = -1;
+      int nextMinPos = 0;
+
+      long combinedHash = hash1;
+      for (int i = 0; i < numHashFunctions; i++) {
+        // Make the combined hash positive and indexable
+        long effectiveHash = (combinedHash & Long.MAX_VALUE) % bitSize;
+        int currentValue = bits.get(effectiveHash);
+        if (currentValue < minValue || minValue == -1) {
+          minValue = currentValue;
+          collector[0] = effectiveHash;
+          nextMinPos = 1;
+        } else if (currentValue == minValue) {
+          collector[nextMinPos++] = effectiveHash;
+        }
+        combinedHash += hash2;
+      }
+
+      return nextMinPos;
+    }
+
     private /* static */ long lowerEight(byte[] bytes) {
       return Longs.fromBytes(
           bytes[7], bytes[6], bytes[5], bytes[4], bytes[3], bytes[2], bytes[1], bytes[0]);
@@ -184,196 +239,5 @@ enum BloomFilterStrategies implements BloomFilter.Strategy {
     }
   };
 
-  /**
-   * Receives hash values from a Bloom filter strategy and updates accordingly.
-   */
-  static interface HashSink {
 
-    /** @return the number of settable positions in this sink. */
-    long bitSize();
-
-    /** Updates this sink at the given index and return if an effective change occurred. */
-    boolean set(long index);
-
-    int get(long index);
-
-  }
-
-  // Note: We use this instead of java.util.BitSet because we need access to the long[] data field
-  static final class BitArray implements HashSink {
-    final long[] data;
-    long bitCount;
-
-    BitArray(long bits) {
-      this(new long[Ints.checkedCast(LongMath.divide(bits, 64, RoundingMode.CEILING))]);
-    }
-
-    // Used by serialization
-    BitArray(long[] data) {
-      checkArgument(data.length > 0, "data length is zero!");
-      this.data = data;
-      long bitCount = 0;
-      for (long value : data) {
-        bitCount += Long.bitCount(value);
-      }
-      this.bitCount = bitCount;
-    }
-
-    /** Returns true if the bit changed value. */
-    public boolean set(long index) {
-      if (get(index) == 0) {
-        data[(int) (index >>> 6)] |= (1L << index);
-        bitCount++;
-        return true;
-      }
-      return false;
-    }
-
-    public int get(long index) {
-      return (int) ((data[(int) (index >>> 6)] >>> index) & 1L);
-    }
-
-    /** Number of bits */
-    public long bitSize() {
-      return (long) data.length * Long.SIZE;
-    }
-
-    /** Number of set bits (1s) */
-    long bitCount() {
-      return bitCount;
-    }
-
-    void clear() {
-      if (this.bitCount > 0) {
-        Arrays.fill(this.data, 0L);
-        this.bitCount = 0;
-      }
-    }
-
-    BitArray copy() {
-      return new BitArray(data.clone());
-    }
-
-    /** Combines the two BitArrays using bitwise OR. */
-    void putAll(BitArray array) {
-      checkArgument(data.length == array.data.length,
-          "BitArrays must be of equal length (%s != %s)", data.length, array.data.length);
-      bitCount = 0;
-      for (int i = 0; i < data.length; i++) {
-        data[i] |= array.data[i];
-        bitCount += Long.bitCount(data[i]);
-      }
-    }
-
-    /** Combines the two BitArrays using bitwise AND. */
-    void intersect(BitArray array) {
-      checkArgument(data.length == array.data.length,
-          "BitArrays must be of equal length (%s != %s)", data.length, array.data.length);
-      bitCount = 0;
-      for (int i = 0; i < data.length; i++) {
-        data[i] &= array.data[i];
-        bitCount += Long.bitCount(data[i]);
-      }
-    }
-
-    @Override public boolean equals(Object o) {
-      if (o instanceof BitArray) {
-        BitArray bitArray = (BitArray) o;
-        return Arrays.equals(data, bitArray.data);
-      }
-      return false;
-    }
-
-  }
-
-
-  static final class IntArray implements HashSink {
-    final long[] data;
-    final int bitsPerInt;
-    final int intBitMask;
-
-    IntArray(long ints, int bitsPerInt) {
-      this(new long[Ints.checkedCast(LongMath.divide(LongMath.checkedMultiply(ints, bitsPerInt), 64, RoundingMode.CEILING))], bitsPerInt);
-    }
-
-    // Used by serialization
-    IntArray(long[] data, int bitsPerInt) {
-      checkArgument(data.length > 0, "data length is zero!");
-      this.data = data;
-      this.bitsPerInt = bitsPerInt;
-      int bitMask = 0;
-      for (int i = 0; i < this.bitsPerInt; i++) {
-        bitMask = (bitMask << 1) | 0x1;
-      }
-      this.intBitMask = bitMask;
-    }
-
-    /** Returns true if the bit changed value. */
-    public boolean set(long index) {
-      // Load the current value.
-      long value = get(index) & 0xFFFFFFFFL;
-      if (value == this.bitsPerInt) return false;
-
-      // Find the bits, we have to update.
-      long incValue = value + 1;
-      long updateBitMask = value ^ incValue;
-
-      // Determine the first and last bit index.
-      long startIndex = index * this.bitsPerInt;
-
-      // Determine if the int is distributed among two longs.
-      int startLong = (int) (startIndex >>> 6);
-      int offset = (int) (64 + (startIndex & 0xFFFFFFC0L) - startIndex - this.bitsPerInt);
-      if (offset >= 0) {
-        // If the offset is positive, we need only update the first long.
-        data[startLong] ^= updateBitMask << offset;
-      } else {
-        // If the offset is negative, we need to update two longs.
-        data[startLong] ^= (updateBitMask >>> -offset);
-        // Furthermore, we need to load the next long to provide the missing right-hand side bits.
-        data[startLong] ^= (updateBitMask << (64 + offset));
-      }
-
-      return true;
-    }
-
-    public int get(long index) {
-      // Determine the first and last bit index.
-      long startIndex = index * this.bitsPerInt;
-
-      // Determine if the int is distributed among two longs.
-      int startLong = (int) (startIndex >>> 6);
-      int offset = (int) (64 + (startIndex & 0xFFFFFFC0L) - startIndex - this.bitsPerInt);
-      if (offset >= 0) {
-        // If the offset is positive, we need to push the long to the right and scrap the left-hand remainder.
-        return ((int) (data[startLong] >>> offset)) & this.intBitMask;
-      } else {
-        // If the offset is negative, we need to push the long to left, scrap the left hand remainder.
-        int result = ((int) (data[startLong] << -offset)) & this.intBitMask;
-        // Furthermore, we need to load the next long to provide the missing right-hand side bits.
-        return result | (int) (data[startLong + 1] >>> (64 + offset));
-      }
-    }
-
-    /** Number of bits */
-    public long bitSize() {
-      return (long) data.length * Long.SIZE / this.bitsPerInt;
-    }
-
-    BitArray copy() {
-      return new BitArray(data.clone());
-    }
-
-    @Override public boolean equals(Object o) {
-      if (o instanceof BitArray) {
-        BitArray bitArray = (BitArray) o;
-        return Arrays.equals(data, bitArray.data);
-      }
-      return false;
-    }
-
-    public int getNumBitsPerPosition() {
-      return this.bitsPerInt;
-    }
-  }
 }
