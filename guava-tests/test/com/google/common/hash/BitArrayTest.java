@@ -35,7 +35,6 @@ public class BitArrayTest extends TestCase {
     Random random = new Random(1L);
     while (testValues.size() < 1000) {
       int value = random.nextInt(range);
-      System.out.println("Adding " + value);
       Assert.assertEquals(testValues.add(value), bitArray.set(value));
     }
 

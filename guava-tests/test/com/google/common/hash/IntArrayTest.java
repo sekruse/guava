@@ -16,6 +16,7 @@
 
 package com.google.common.hash;
 
+import com.google.common.hash.data.BitArray;
 import com.google.common.hash.data.IntArray;
 import junit.framework.TestCase;
 import org.junit.Assert;
@@ -27,6 +28,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.SortedSet;
+import java.util.TreeMap;
+import java.util.TreeSet;
 
 
 public class IntArrayTest extends TestCase {
@@ -47,6 +52,40 @@ public class IntArrayTest extends TestCase {
       Assert.assertEquals("At index " + i, testValues.get(i).intValue(), intArray.get(i));
     }
     Map<Integer, Integer> tests = new HashMap<Integer, Integer>();
+  }
+
+  public void testClearingCursor() {
+    int range = 10000;
+    int numBitsPerInt = 7;
+    int maxCount = (1 << (numBitsPerInt)) - 1;
+
+    SortedMap<Long, Integer> testValues = new TreeMap<Long, Integer>();
+    IntArray intArray = new IntArray(range, numBitsPerInt);
+    Random random = new Random(1L);
+    while (testValues.size() < range / 4) {
+      long value = random.nextInt(range);
+      if (!testValues.containsKey(value)) {
+        int count = random.nextInt(maxCount + 1);
+//        System.out.println("Adding " + value + " => " + count);
+        if (count > 0) {
+          intArray.add(value, count);
+          testValues.put(value, count);
+        }
+      }
+
+    }
+
+    IntArray.LongIntCursor cursor = intArray.clearingCursor();
+    for (Map.Entry<Long, Integer> entry : testValues.entrySet()) {
+      junit.framework.Assert.assertTrue(cursor.moveToNext());
+      junit.framework.Assert.assertEquals((long) entry.getKey(), (long) cursor.getLong());
+      junit.framework.Assert.assertEquals((int) entry.getValue(), cursor.getInt());
+    }
+
+    junit.framework.Assert.assertFalse(cursor.moveToNext());
+    for (long block : intArray.getRawData()) {
+      junit.framework.Assert.assertEquals(0L, block);
+    }
   }
 
 }

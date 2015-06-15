@@ -50,7 +50,12 @@ public final class SpectralBloomFilter<T> {
   /**
    * Aggregates operations into a transaction.
    */
-  private BitArray transactionCache;
+  private BitArray setBatchBuffer;
+
+  /**
+   * Aggregates operations into a transaction.
+   */
+  private IntArray bagBatchBuffer;
 
   /**
    * Reuse object to return the minimum count positions for a certain object. Operations that use this object should
@@ -103,8 +108,8 @@ public final class SpectralBloomFilter<T> {
    * For the given object, find all the current minimum counts in the current spectral filter and mark these to be
    * updated.
    */
-  public void putToBatch(T object) {
-    BitArray transactionCache = getTransactionCache();
+  public void putToSetBatch(T object) {
+    BitArray transactionCache = getSetBatchBuffer();
     long[] minPositions = getMinPositions();
     int numMinPositions = strategy.getMinPositions(object, this.funnel, this.numHashFunctions, this.ints, minPositions);
     for (int minPositionIndex = 0; minPositionIndex < numMinPositions; minPositionIndex++) {
@@ -112,10 +117,50 @@ public final class SpectralBloomFilter<T> {
     }
   }
 
-  public void executeBatch() {
-    BitArray.LongIterator iterator = getTransactionCache().clearingIterator();
+  /**
+   * For the given object, find all the current minimum counts in the current spectral filter and mark these to be
+   * updated to the new minimum.
+   */
+  public void putToBagBatch(T object, int count) {
+    // Fetch the batch buffer and find out which positions are in principle affected.
+    IntArray batchCache = getBagBatchBuffer();
+    long[] positions = getMinPositions();
+    int numPosititions = strategy.getPositions(object, this.funnel, this.numHashFunctions, this.ints, positions);
+
+    // Find the new count for the given object.
+    int minValue = Integer.MAX_VALUE;
+    for (int positionIndex = 0; positionIndex < numPosititions; positionIndex++) {
+      int curValue = this.ints.get(positions[positionIndex]);
+      if (curValue < minValue) {
+        minValue = curValue;
+      }
+    }
+    int finalValue = minValue + count;
+
+    // Update the deltas in the batch cache.
+    for (int positionIndex = 0; positionIndex < numPosititions; positionIndex++) {
+      long position = positions[positionIndex];
+      int delta = finalValue - this.ints.get(position);
+      if (delta > 0) {
+        int batchCacheDelta = delta - batchCache.get(position);
+        if (batchCacheDelta > 0) {
+          batchCache.add(position, batchCacheDelta);
+        }
+      }
+    }
+  }
+
+  public void executeSetBatch() {
+    BitArray.LongIterator iterator = getSetBatchBuffer().clearingIterator();
     while (iterator.hasNext()) {
       this.ints.set(iterator.next());
+    }
+  }
+
+  public void executeBagBatch() {
+    IntArray.LongIntCursor cursor = getBagBatchBuffer().clearingCursor();
+    while (cursor.moveToNext()) {
+      this.ints.add(cursor.getLong(), cursor.getInt());
     }
   }
 
@@ -397,11 +442,18 @@ public final class SpectralBloomFilter<T> {
     return this.ints.getRawData();
   }
 
-  private BitArray getTransactionCache() {
-    if (this.transactionCache == null) {
-      this.transactionCache = new BitArray(this.numPositions);
+  private BitArray getSetBatchBuffer() {
+    if (this.setBatchBuffer == null) {
+      this.setBatchBuffer = new BitArray(this.numPositions);
     }
-    return this.transactionCache;
+    return this.setBatchBuffer;
+  }
+
+  private IntArray getBagBatchBuffer() {
+    if (this.bagBatchBuffer == null) {
+      this.bagBatchBuffer = new IntArray(this.numPositions, this.numBitsPerPosition);
+    }
+    return this.bagBatchBuffer;
   }
 
   public long[] getMinPositions() {

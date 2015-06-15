@@ -3,7 +3,6 @@ package com.google.common.hash.data;
 import com.google.common.math.LongMath;
 import com.google.common.primitives.Ints;
 
-import javax.naming.OperationNotSupportedException;
 import java.math.RoundingMode;
 import java.util.Arrays;
 
@@ -18,6 +17,7 @@ public final class IntArray implements HashSink<IntArray> {
   final int bitsPerInt;
   final int intBitMask;
   int numSetPositions = -1;
+  final int maxIndex;
 
   public IntArray(long ints, int bitsPerInt) {
     this(new long[Ints.checkedCast(LongMath.divide(LongMath.checkedMultiply(ints, bitsPerInt), 64, RoundingMode.CEILING))], bitsPerInt);
@@ -30,6 +30,7 @@ public final class IntArray implements HashSink<IntArray> {
     this.data = data;
     this.bitsPerInt = bitsPerInt;
     this.intBitMask = (int) ((1L << this.bitsPerInt) - 1);
+    this.maxIndex = (this.data.length << 6) / bitsPerInt;
   }
 
   /**
@@ -167,9 +168,9 @@ public final class IntArray implements HashSink<IntArray> {
   @Override
   public void clear() {
     if (positionCount() > 0)
-    for (int i = 0; i < data.length; i++) {
-      this.data[i] = 0L;
-    }
+      for (int i = 0; i < data.length; i++) {
+        this.data[i] = 0L;
+      }
     this.numSetPositions = 0;
   }
 
@@ -191,5 +192,87 @@ public final class IntArray implements HashSink<IntArray> {
 
   public int getValueBitMask() {
     return intBitMask;
+  }
+
+  public LongIntCursor clearingCursor() {
+    return new ClearingCursor();
+  }
+
+  public interface LongIntCursor {
+    boolean moveToNext();
+
+    long getLong();
+
+    int getInt();
+  }
+
+  private class ClearingCursor implements LongIntCursor {
+
+    int currentIndex = 0;
+
+    long currentPos = -1L;
+
+    int currentValue = -1;
+
+    @Override
+    public boolean moveToNext() {
+      do {
+        // Mini skip: Move within the current long until we find a non-zero entry.
+        int newIndex = 0;
+        do {
+          this.currentPos++;
+          newIndex = (int) (this.currentPos * bitsPerInt >> 6);
+        } while (newIndex == this.currentIndex
+            && this.currentPos < maxIndex
+            && (this.currentValue = get(this.currentPos)) == 0);
+
+        if (this.currentPos >= maxIndex) {
+          // If we have reached the final position, we still need to clear the current block.
+          data[this.currentIndex] = 0L;
+          return false;
+        }
+
+        if (newIndex == this.currentIndex) {
+          return true;
+        }
+
+        // If we moved out of a long, clear it.
+        data[this.currentIndex] = 0L;
+
+        // Fast-skip: Skip as long as the "current" long is 0 or does not exist.
+        while (currentIndex < data.length && data[currentIndex] == 0) {
+          currentIndex++;
+        }
+
+        // Adjust the position.
+        if (currentIndex < data.length) {
+          long highBitIndex = (this.currentIndex << 6) + Long.numberOfLeadingZeros(data[this.currentIndex]);
+          int newPos = (int) (highBitIndex / bitsPerInt);
+          if (newPos >= this.currentPos) {
+            this.currentPos = newPos;
+            this.currentValue = get(this.currentPos);
+            return true;
+          } else {
+            // We might need to loop, as we could be facing pending bits of an already encountered item in the new
+            // long. In that case, we simply reset the position and go back to the beginning of the function to
+            // start over with a mini skip within the current longblock.
+            this.currentPos = newPos;
+            continue;
+          }
+        } else {
+          return false;
+        }
+      } while (true);
+    }
+
+    @Override
+    public long getLong() {
+      return this.currentPos;
+    }
+
+    @Override
+    public int getInt() {
+      return get(this.currentPos);
+    }
   }
 }

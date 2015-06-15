@@ -32,6 +32,13 @@ public interface BloomFilterStrategy extends java.io.Serializable {
    */
   <T> int getMinPositions(T object, Funnel<? super T> funnel, int numHashFunctions, HashSink bits, long[] collector);
 
+  /**
+   * Gets the value positions for a given object in the hash sink.
+   * @param collector is an array of the size equal to numHashFunctions that collects the positions
+   * @return the number of valid entries in the collector
+   */
+  <T> int getPositions(T object, Funnel<? super T> funnel, int numHashFunctions, HashSink bits, long[] collector);
+
     /**
      * Identifier used to encode this strategy, when marshalled as part of a BloomFilter.
      * Only values in the [-128, 127] range are valid for the compact serial form.

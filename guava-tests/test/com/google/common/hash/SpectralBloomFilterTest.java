@@ -74,11 +74,13 @@ public class SpectralBloomFilterTest extends TestCase {
   }
 
   public void testLargerBatchPut() {
+    int numRounds = 100000;
+
     SpectralBloomFilter<Integer> countingBloomFilter = SpectralBloomFilter.create(31, Funnels.integerFunnel(), 100, 0.1);
     Map<Integer, Integer> counter = new HashMap<Integer, Integer>();
     Random random = new Random(42L);
 
-    for (int round = 0; round < 100000; round++) {
+    for (int round = 0; round < numRounds; round++) {
       Set<Integer> roundSet = new HashSet<Integer>();
       for (int i = 0; i < 100; i++) {
         Integer value = random.nextInt(200);
@@ -88,9 +90,9 @@ public class SpectralBloomFilterTest extends TestCase {
         Integer count = counter.get(value);
         if (count == null) count = 0;
         counter.put(value, count + 1);
-        countingBloomFilter.putToBatch(value);
+        countingBloomFilter.putToSetBatch(value);
       }
-      countingBloomFilter.executeBatch();
+      countingBloomFilter.executeSetBatch();
     }
 
     for (Map.Entry<Integer, Integer> test : counter.entrySet()) {
@@ -98,6 +100,41 @@ public class SpectralBloomFilterTest extends TestCase {
       int minAssertedCount = Math.min(countingBloomFilter.getMaxValue(), test.getValue());
       Assert.assertTrue(String.format("Asserted count for %s: >= %s, found %s.", test.getKey().intValue(), minAssertedCount, approximateCount),
           approximateCount >= minAssertedCount);
+      Assert.assertTrue(String.format("Asserted count for %s: <= %s, found %s.", test.getKey().intValue(), numRounds, approximateCount),
+          approximateCount <= numRounds);
+    }
+  }
+
+  public void testLargerBagBatchPut() {
+    final int numRounds = 100;
+    final int maxDelta = 42;
+    final int maxPossibleCount = numRounds * maxDelta;
+
+    SpectralBloomFilter<Integer> countingBloomFilter = SpectralBloomFilter.create(31, Funnels.integerFunnel(), 100, 0.1);
+    Map<Integer, Integer> counter = new HashMap<Integer, Integer>();
+    Random random = new Random(42L);
+
+    for (int round = 0; round < numRounds; round++) {
+      Set<Integer> roundSet = new HashSet<Integer>();
+      for (int i = 0; i < 100; i++) {
+        Integer value = random.nextInt(200);
+        if (!roundSet.add(value)) continue;
+        int newCount = random.nextInt(maxDelta) + 1;
+        Integer count = counter.get(value);
+        if (count == null) count = 0;
+        counter.put(value, count + newCount);
+        countingBloomFilter.putToBagBatch(value, newCount);
+      }
+      countingBloomFilter.executeBagBatch();
+    }
+
+    for (Map.Entry<Integer, Integer> test : counter.entrySet()) {
+      int approximateCount = countingBloomFilter.getCount(test.getKey());
+      int minAssertedCount = Math.min(countingBloomFilter.getMaxValue(), test.getValue());
+      Assert.assertTrue(String.format("Asserted count for %s: >= %s, found %s.", test.getKey().intValue(), minAssertedCount, approximateCount),
+          approximateCount >= minAssertedCount);
+      Assert.assertTrue(String.format("Asserted count for %s: <= %s, found %s.", test.getKey().intValue(), maxPossibleCount, approximateCount),
+          approximateCount <= maxPossibleCount);
     }
   }
 
@@ -118,9 +155,9 @@ public class SpectralBloomFilterTest extends TestCase {
         Integer count = counter1.get(value);
         if (count == null) count = 0;
         counter1.put(value, count + 1);
-        spectralBloomFilter1.putToBatch(value);
+        spectralBloomFilter1.putToSetBatch(value);
       }
-      spectralBloomFilter1.executeBatch();
+      spectralBloomFilter1.executeSetBatch();
     }
 
     SpectralBloomFilter<Integer> spectralBloomFilter2 = SpectralBloomFilter.create(7, Funnels.integerFunnel(), 100, 0.1);
@@ -135,9 +172,9 @@ public class SpectralBloomFilterTest extends TestCase {
         Integer count = counter2.get(value);
         if (count == null) count = 0;
         counter2.put(value, count + 1);
-        spectralBloomFilter2.putToBatch(value);
+        spectralBloomFilter2.putToSetBatch(value);
       }
-      spectralBloomFilter2.executeBatch();
+      spectralBloomFilter2.executeSetBatch();
     }
 
     spectralBloomFilter1.putAll(spectralBloomFilter2);

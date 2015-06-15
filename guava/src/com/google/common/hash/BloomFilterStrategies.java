@@ -14,8 +14,6 @@
 
 package com.google.common.hash;
 
-import static com.google.common.base.Preconditions.checkArgument;
-
 import com.google.common.hash.data.HashSink;
 import com.google.common.primitives.Longs;
 
@@ -24,7 +22,7 @@ import com.google.common.primitives.Longs;
  * be mapped to a BloomFilter of M bits and k hash functions. These
  * strategies are part of the serialized form of the Bloom filters that use them, thus they must be
  * preserved as is (no updates allowed, only introduction of new versions).
- *
+ * <p/>
  * Important: the order of the constants cannot change, and they cannot be deleted - we depend
  * on their ordinal for BloomFilter serialization.
  *
@@ -38,8 +36,9 @@ public enum BloomFilterStrategies implements BloomFilterStrategy {
    * performance of a Bloom filter (yet only needs two 32bit hash functions).
    */
   MURMUR128_MITZ_32() {
-    @Override public <T> boolean put(T object, Funnel<? super T> funnel,
-        int numHashFunctions, HashSink sink) {
+    @Override
+    public <T> boolean put(T object, Funnel<? super T> funnel,
+                           int numHashFunctions, HashSink sink) {
       long bitSize = sink.positionSize();
       long hash64 = Hashing.murmur3_128().hashObject(object, funnel).asLong();
       int hash1 = (int) hash64;
@@ -105,16 +104,37 @@ public enum BloomFilterStrategies implements BloomFilterStrategy {
         } else if (currentValue == minValue) {
           collector[nextMinPos++] = effectiveHash;
         }
-
       }
 
       return nextMinPos;
     }
 
+    @Override
+    public <T> int getPositions(T object, Funnel<? super T> funnel, int numHashFunctions, HashSink bits, long[] collector) {
+      long bitSize = bits.positionSize();
+      long hash64 = Hashing.murmur3_128().hashObject(object, funnel).asLong();
+      int hash1 = (int) hash64;
+      int hash2 = (int) (hash64 >>> 32);
+
+      int nextPos = 0;
+      for (int i = 1; i <= numHashFunctions; i++) {
+        int combinedHash = hash1 + (i * hash2);
+        // Flip all the bits if it's negative (guaranteed positive number)
+        if (combinedHash < 0) {
+          combinedHash = ~combinedHash;
+        }
+        long effectiveHash = combinedHash % bitSize;
+        collector[nextPos++] = effectiveHash;
+      }
+
+      return nextPos;
+    }
+
 
     // Keep this method for efficiency reasosn.
-    @Override public <T> boolean mightContain(T object, Funnel<? super T> funnel,
-        int numHashFunctions, HashSink bits) {
+    @Override
+    public <T> boolean mightContain(T object, Funnel<? super T> funnel,
+                                    int numHashFunctions, HashSink bits) {
       long bitSize = bits.positionSize();
       long hash64 = Hashing.murmur3_128().hashObject(object, funnel).asLong();
       int hash1 = (int) hash64;
@@ -142,7 +162,7 @@ public enum BloomFilterStrategies implements BloomFilterStrategy {
   MURMUR128_MITZ_64() {
     @Override
     public <T> boolean put(T object, Funnel<? super T> funnel,
-        int numHashFunctions, HashSink sink) {
+                           int numHashFunctions, HashSink sink) {
       long bitSize = sink.positionSize();
       byte[] bytes = Hashing.murmur3_128().hashObject(object, funnel).getBytesInternal();
       long hash1 = lowerEight(bytes);
@@ -160,7 +180,7 @@ public enum BloomFilterStrategies implements BloomFilterStrategy {
 
     @Override
     public <T> boolean mightContain(T object, Funnel<? super T> funnel,
-        int numHashFunctions, HashSink bits) {
+                                    int numHashFunctions, HashSink bits) {
       long bitSize = bits.positionSize();
       byte[] bytes = Hashing.murmur3_128().hashObject(object, funnel).getBytesInternal();
       long hash1 = lowerEight(bytes);
@@ -226,6 +246,28 @@ public enum BloomFilterStrategies implements BloomFilterStrategy {
       }
 
       return nextMinPos;
+    }
+
+    @Override
+    public <T> int getPositions(T object, Funnel<? super T> funnel, int numHashFunctions, HashSink bits,
+                                long[] collector) {
+
+      long bitSize = bits.positionSize();
+      byte[] bytes = Hashing.murmur3_128().hashObject(object, funnel).getBytesInternal();
+      long hash1 = lowerEight(bytes);
+      long hash2 = upperEight(bytes);
+
+      int nextPos = 0;
+
+      long combinedHash = hash1;
+      for (int i = 0; i < numHashFunctions; i++) {
+        // Make the combined hash positive and indexable
+        long effectiveHash = (combinedHash & Long.MAX_VALUE) % bitSize;
+        collector[nextPos++] = effectiveHash;
+        combinedHash += hash2;
+      }
+
+      return nextPos;
     }
 
     private /* static */ long lowerEight(byte[] bytes) {
