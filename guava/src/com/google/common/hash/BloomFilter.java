@@ -502,6 +502,14 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
     this.bits = newBits;
   }
 
+  public void wrap(long[] data, long size) {
+    BitArray newBits = new BitArray(data, size);
+    if (this.bits.positionSize() != newBits.positionSize()) {
+      throw new IllegalArgumentException(String.format("Given %d-bit array, need %d bits.", newBits.positionSize(), this.bits.positionSize()));
+    }
+    this.bits = newBits;
+  }
+
   public long[] exportBits() {
     return this.bits.getRawData();
   }

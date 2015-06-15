@@ -13,6 +13,15 @@ import static com.google.common.base.Preconditions.checkArgument;
  * @since 12.06.2015
  */
 public final class IntArray implements HashSink<IntArray> {
+
+  public static long sizeFor(long minPositionSize, int bitsPerInt) {
+    // Find out, how many longs we will need for our ints.
+    long numLongs = ((long) minPositionSize * bitsPerInt + Long.SIZE - 1) / Long.SIZE;
+
+    // Find out, how many ints fit into these longs.
+    return numLongs * Long.SIZE / bitsPerInt;
+  }
+
   final long[] data;
   final int bitsPerInt;
   final int intBitMask;
@@ -198,6 +207,10 @@ public final class IntArray implements HashSink<IntArray> {
     return new ClearingCursor();
   }
 
+  public LongIntCursor cursor() {
+    return new DefaultCursor();
+  }
+
   public interface LongIntCursor {
     boolean moveToNext();
 
@@ -243,6 +256,70 @@ public final class IntArray implements HashSink<IntArray> {
         while (currentIndex < data.length && data[currentIndex] == 0) {
           currentIndex++;
         }
+
+        // Adjust the position.
+        if (currentIndex < data.length) {
+          long highBitIndex = (this.currentIndex << 6) + Long.numberOfLeadingZeros(data[this.currentIndex]);
+          int newPos = (int) (highBitIndex / bitsPerInt);
+          if (newPos >= this.currentPos) {
+            this.currentPos = newPos;
+            this.currentValue = get(this.currentPos);
+            return true;
+          } else {
+            // We might need to loop, as we could be facing pending bits of an already encountered item in the new
+            // long. In that case, we simply reset the position and go back to the beginning of the function to
+            // start over with a mini skip within the current longblock.
+            this.currentPos = newPos;
+            continue;
+          }
+        } else {
+          return false;
+        }
+      } while (true);
+    }
+
+    @Override
+    public long getLong() {
+      return this.currentPos;
+    }
+
+    @Override
+    public int getInt() {
+      return get(this.currentPos);
+    }
+  }
+  private class DefaultCursor implements LongIntCursor {
+
+    int currentIndex = 0;
+
+    long currentPos = -1L;
+
+    int currentValue = -1;
+
+    @Override
+    public boolean moveToNext() {
+      do {
+        // Mini skip: Move within the current long until we find a non-zero entry.
+        int newIndex = 0;
+        do {
+          this.currentPos++;
+          newIndex = (int) (this.currentPos * bitsPerInt >> 6);
+        } while (newIndex == this.currentIndex
+            && this.currentPos < maxIndex
+            && (this.currentValue = get(this.currentPos)) == 0);
+
+        if (this.currentPos >= maxIndex) {
+          return false;
+        }
+
+        if (newIndex == this.currentIndex) {
+          return true;
+        }
+
+        // Fast-skip: Skip as long as the "current" long is 0 or does not exist.
+        do {
+          currentIndex++;
+        } while (currentIndex < data.length && data[currentIndex] == 0);
 
         // Adjust the position.
         if (currentIndex < data.length) {

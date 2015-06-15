@@ -73,7 +73,7 @@ public final class SpectralBloomFilter<T> {
     checkArgument(numHashFunctions <= 255,
         "numHashFunctions (%s) must be <= 255", numHashFunctions);
     this.ints = new IntArray(numPositions, numBitsPerPosition);
-    this.numPositions = numPositions;
+    this.numPositions = IntArray.sizeFor(numPositions, numBitsPerPosition);
     this.numBitsPerPosition = ints.getNumBitsPerPosition();
     this.numHashFunctions = numHashFunctions;
     this.funnel = checkNotNull(funnel);
@@ -466,4 +466,52 @@ public final class SpectralBloomFilter<T> {
   public int getMaxValue() {
     return this.ints.getValueBitMask();
   }
+
+  public void clear() {
+    this.ints.clear();
+  }
+
+  /**
+   * Turns this spectral Bloom filter into a normal Bloom filter that only contains elements that are guaranteed
+   * to be over or equal to the given threshold. If the Bloom filter would be empty, {@code null} is returned instead.
+   * Please note, that for <bb>n</bb> hash functions, there must be at least <bb>n</bb> frequent entries in this
+   * spectral Bloom filter to ensure at least one frequent element.
+   *
+   * @param threshold is the minimum frequency of elements to be included in the Bloom filter
+   * @return a Bloom filter with frequent elements or {@code null}
+   */
+  public BloomFilter toBloomFilter(int threshold) {
+    threshold = Math.min(threshold, this.getMaxValue());
+
+    // Lazy initialize the Bloom filter.
+    BitArray bloomFilterBits = null;
+    long[] aboveThresholdValues = new long[this.numHashFunctions - 1];
+    int numAboveThresholdValues = 0;
+
+    IntArray.LongIntCursor cursor = this.ints.cursor();
+    while (cursor.moveToNext()) {
+      if (cursor.getInt() >= threshold) {
+        if (numAboveThresholdValues < aboveThresholdValues.length) {
+          // If we do not have enough values for a valid Bloom filter, simply remember the position.
+          aboveThresholdValues[numAboveThresholdValues++] = cursor.getLong();
+
+        } else {
+          if (numAboveThresholdValues++ == aboveThresholdValues.length) {
+            // If we have a enough values for a valid Bloom filter, create a bit vector with the already remembered positions.
+            bloomFilterBits = new BitArray(this.numPositions, true);
+            for (long aboveThresholdValue : aboveThresholdValues) {
+              bloomFilterBits.set(aboveThresholdValue);
+            }
+          }
+
+          // Add the latest value to the Bloom filter.
+          bloomFilterBits.set(cursor.getLong());
+        }
+      }
+    }
+
+    // Create a Bloom filter if we have created bits.
+    return bloomFilterBits == null ? null : new BloomFilter<T>(bloomFilterBits, this.numHashFunctions, this.funnel, this.strategy);
+  }
+
 }

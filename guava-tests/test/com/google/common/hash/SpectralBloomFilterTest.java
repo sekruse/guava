@@ -52,6 +52,33 @@ public class SpectralBloomFilterTest extends TestCase {
     }
   }
 
+  public void testBloomFilterConversion() {
+    SpectralBloomFilter<Integer> countingBloomFilter = SpectralBloomFilter.create(4, Funnels.integerFunnel(), 10, 0.5);
+    Map<Integer, Integer> tests = new HashMap<Integer, Integer>();
+    tests.put(1, 5);
+    tests.put(2, 3);
+    tests.put(7, 3);
+
+    for (Map.Entry<Integer, Integer> test : tests.entrySet()) {
+      for (int i = 0; i < test.getValue(); i++) {
+        countingBloomFilter.put(test.getKey());
+      }
+    }
+
+    BloomFilter bloomFilter3 = countingBloomFilter.toBloomFilter(3);
+    Assert.assertTrue(bloomFilter3.mightContain(1));
+    Assert.assertTrue(bloomFilter3.mightContain(2));
+    Assert.assertTrue(bloomFilter3.mightContain(7));
+
+    BloomFilter bloomFilter5 = countingBloomFilter.toBloomFilter(5);
+    Assert.assertTrue(bloomFilter5.mightContain(1));
+    Assert.assertFalse(bloomFilter5.mightContain(2));
+    Assert.assertFalse(bloomFilter5.mightContain(7));
+
+    BloomFilter bloomFilter6 = countingBloomFilter.toBloomFilter(6);
+    Assert.assertEquals(null, bloomFilter6);
+  }
+
   public void testLargerSinglePut() {
     SpectralBloomFilter<Integer> countingBloomFilter = SpectralBloomFilter.create(15, Funnels.integerFunnel(), 100, 0.1);
     Map<Integer, Integer> counter = new HashMap<Integer, Integer>();

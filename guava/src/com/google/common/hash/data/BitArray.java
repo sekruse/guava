@@ -16,13 +16,22 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class BitArray implements HashSink<BitArray> {
   final long[] data;
   long bitCount;
+  long size;
 
   public BitArray(long bits) {
     this(new long[Ints.checkedCast(LongMath.divide(bits, 64, RoundingMode.CEILING))]);
   }
 
+  public BitArray(long bits, boolean strictSize) {
+    this(new long[Ints.checkedCast(LongMath.divide(bits, 64, RoundingMode.CEILING))], strictSize ? bits : Ints.checkedCast(LongMath.divide(bits, 64, RoundingMode.CEILING)));
+  }
+
   // Used by serialization
   public BitArray(long[] data) {
+    this(data, (long) data.length * Long.SIZE);
+  }
+  // Used by serialization
+  public BitArray(long[] data, long size) {
     checkArgument(data.length > 0, "data length is zero!");
     this.data = data;
     long bitCount = 0;
@@ -30,6 +39,7 @@ public final class BitArray implements HashSink<BitArray> {
       bitCount += Long.bitCount(value);
     }
     this.bitCount = bitCount;
+    this.size = size;
   }
 
   /**
@@ -52,7 +62,7 @@ public final class BitArray implements HashSink<BitArray> {
    * Number of bits
    */
   public long positionSize() {
-    return (long) data.length * Long.SIZE;
+    return this.size;
   }
 
   /**

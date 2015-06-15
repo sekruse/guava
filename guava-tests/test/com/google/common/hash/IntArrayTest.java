@@ -66,7 +66,6 @@ public class IntArrayTest extends TestCase {
       long value = random.nextInt(range);
       if (!testValues.containsKey(value)) {
         int count = random.nextInt(maxCount + 1);
-//        System.out.println("Adding " + value + " => " + count);
         if (count > 0) {
           intArray.add(value, count);
           testValues.put(value, count);
@@ -86,6 +85,36 @@ public class IntArrayTest extends TestCase {
     for (long block : intArray.getRawData()) {
       junit.framework.Assert.assertEquals(0L, block);
     }
+  }
+
+  public void testDefaultCursor() {
+    int range = 10000;
+    int numBitsPerInt = 7;
+    int maxCount = (1 << (numBitsPerInt)) - 1;
+
+    SortedMap<Long, Integer> testValues = new TreeMap<Long, Integer>();
+    IntArray intArray = new IntArray(range, numBitsPerInt);
+    Random random = new Random(1L);
+    while (testValues.size() < range / 4) {
+      long value = random.nextInt(range);
+      if (!testValues.containsKey(value)) {
+        int count = random.nextInt(maxCount + 1);
+        if (count > 0) {
+          intArray.add(value, count);
+          testValues.put(value, count);
+        }
+      }
+
+    }
+
+    IntArray.LongIntCursor cursor = intArray.cursor();
+    for (Map.Entry<Long, Integer> entry : testValues.entrySet()) {
+      junit.framework.Assert.assertTrue(cursor.moveToNext());
+      junit.framework.Assert.assertEquals((long) entry.getKey(), (long) cursor.getLong());
+      junit.framework.Assert.assertEquals((int) entry.getValue(), cursor.getInt());
+    }
+
+    junit.framework.Assert.assertFalse(cursor.moveToNext());
   }
 
 }
