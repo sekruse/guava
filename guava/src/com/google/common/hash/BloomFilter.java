@@ -61,6 +61,9 @@ import static com.google.common.base.Preconditions.checkNotNull;
 @Beta
 public final class BloomFilter<T> implements Predicate<T>, Serializable {
 
+  /** The default strategy to pick by {@link #create(Funnel, long)}  and its siblings. */
+  public static final BloomFilterStrategies DEFAULT_STRATEGY = BloomFilterStrategies.MURMUR128_MITZ_64;
+
   /** The bit set of the BloomFilter (not necessarily power of 2!)*/
   private BitArray bits;
 
@@ -78,7 +81,7 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
   /**
    * Creates a BloomFilter.
    */
-  BloomFilter(BitArray bits, int numHashFunctions, Funnel<? super T> funnel,
+  public BloomFilter(BitArray bits, int numHashFunctions, Funnel<? super T> funnel,
       BloomFilterStrategy strategy) {
     checkArgument(numHashFunctions > 0,
         "numHashFunctions (%s) must be > 0", numHashFunctions);
@@ -297,11 +300,11 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
   @CheckReturnValue
   public static <T> BloomFilter<T> create(
       Funnel<? super T> funnel, long expectedInsertions, double fpp) {
-    return create(funnel, expectedInsertions, fpp, BloomFilterStrategies.MURMUR128_MITZ_64);
+    return create(funnel, expectedInsertions, fpp, DEFAULT_STRATEGY);
   }
 
   @VisibleForTesting
-  static <T> BloomFilter<T> create(
+  public static <T> BloomFilter<T> create(
       Funnel<? super T> funnel, long expectedInsertions, double fpp, BloomFilterStrategy strategy) {
     checkNotNull(funnel);
     checkArgument(expectedInsertions >= 0, "Expected insertions (%s) must be >= 0",
@@ -374,7 +377,7 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
    * @param m total number of bits in Bloom filter (must be positive)
    */
   @VisibleForTesting
-  static int optimalNumOfHashFunctions(long n, long m) {
+  public static int optimalNumOfHashFunctions(long n, long m) {
     // (m / n) * log(2), but avoid truncation due to division!
     return Math.max(1, (int) Math.round((double) m / n * Math.log(2)));
   }
@@ -389,7 +392,7 @@ public final class BloomFilter<T> implements Predicate<T>, Serializable {
    * @param p false positive rate (must be 0 < p < 1)
    */
   @VisibleForTesting
-  static long optimalNumOfBits(long n, double p) {
+  public static long optimalNumOfBits(long n, double p) {
     if (p == 0) {
       p = Double.MIN_VALUE;
     }

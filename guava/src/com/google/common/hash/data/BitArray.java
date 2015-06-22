@@ -1,6 +1,5 @@
 package com.google.common.hash.data;
 
-import com.google.common.hash.BloomFilterStrategies;
 import com.google.common.math.LongMath;
 import com.google.common.primitives.Ints;
 
@@ -9,28 +8,47 @@ import java.util.Arrays;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-/**
- * @author sebastian.kruse
- * @since 12.06.2015
- */ // Note: We use this instead of java.util.BitSet because we need access to the long[] data field
+// Note: We use this instead of java.util.BitSet because we need access to the long[] data field
 public final class BitArray implements HashSink<BitArray> {
   final long[] data;
   long bitCount;
+
   long size;
 
+  /**
+   * Creates a new bit array with a given minimum number of bits. The actual size of the bit array might be greater, thought.
+   *
+   * @param bits is the number of minimum bits in this bit array.
+   */
   public BitArray(long bits) {
-    this(new long[Ints.checkedCast(LongMath.divide(bits, 64, RoundingMode.CEILING))]);
+    this(bits, false);
   }
 
+  /**
+   * Creates a new bit array with a given minimum number of bits.
+   *
+   * @param bits       is the number of minimum bits in this bit array.
+   * @param strictSize whether the array should have exactly the number of bits provided
+   */
   public BitArray(long bits, boolean strictSize) {
     this(new long[Ints.checkedCast(LongMath.divide(bits, 64, RoundingMode.CEILING))], strictSize ? bits : Ints.checkedCast(LongMath.divide(bits, 64, RoundingMode.CEILING)));
   }
 
-  // Used by serialization
+  /**
+   * Creates a new bit array that wraps the given {@code long[]}.
+   *
+   * @param data are the bits to wrap
+   */
   public BitArray(long[] data) {
     this(data, (long) data.length * Long.SIZE);
   }
-  // Used by serialization
+
+  /**
+   * Creates a new bit array that wraps the given {@code long[]}.
+   *
+   * @param data are the bits to wrap
+   * @param size is the number of bits to be actually used within {@code data}
+   */
   public BitArray(long[] data, long size) {
     checkArgument(data.length > 0, "data length is zero!");
     this.data = data;
