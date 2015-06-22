@@ -31,7 +31,8 @@ public final class BitArray implements HashSink<BitArray> {
    * @param strictSize whether the array should have exactly the number of bits provided
    */
   public BitArray(long bits, boolean strictSize) {
-    this(new long[Ints.checkedCast(LongMath.divide(bits, 64, RoundingMode.CEILING))], strictSize ? bits : Ints.checkedCast(LongMath.divide(bits, 64, RoundingMode.CEILING)));
+    this(new long[Ints.checkedCast(LongMath.divide(bits, 64, RoundingMode.CEILING))],
+        strictSize ? bits : LongMath.checkedMultiply(LongMath.divide(bits, 64, RoundingMode.CEILING), 64L));
   }
 
   /**
